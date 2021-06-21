@@ -1,0 +1,31 @@
+[package]
+name = "actix-web-skeleton"
+version = "0.1.0"
+authors = ["Rivsen <Rivsen@users.noreply.github.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "actix_web_skeleton"
+path = "src/main.rs"
+
+[lib]
+name = "actix_web_skeleton"
+path = "src/lib.rs"
+
+
+[dependencies]
+rand = "0.7"
+actix-web = "3.3.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dotenv="0.15.0"
+env_logger="0.7.1"
+futures = "0.3"
+num_cpus = "1.13.0"
+
+# The development profile, used for `cargo build`
+[profile.dev]
+opt-level = 0  # Controls the --opt-level the compiler builds with
+debug = true   # Controls whether the compiler passes `-g`

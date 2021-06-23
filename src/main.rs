@@ -11,6 +11,10 @@ use std::fs::{read_dir, File, DirEntry};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use prettytable::{Table, Row, Cell};
+use console::Term;
+use dialoguer::theme::ColorfulTheme;
+use dialoguer::{Select, Input};
+use std::borrow::Borrow;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TemplateOption {
@@ -33,6 +37,30 @@ pub struct TemplateEntry {
     tera: Option<Tera>,
     context: Option<Context>,
     path: DirEntry,
+}
+
+#[derive(Debug)]
+pub struct TemplateEntryList {
+    keys: Vec<String>,
+    templates: HashMap<String, TemplateEntry>,
+}
+
+impl TemplateEntryList {
+    pub fn print_console_table(&self) {
+        let mut table = Table::new();
+        let templates = &self.templates;
+        table.add_row(row!["id", "Name", "Path"]);
+
+        for (_, template_entry) in templates.into_iter() {
+            table.add_row(Row::new(vec![
+                Cell::new(&template_entry.template.id),
+                Cell::new(&template_entry.template.name),
+                Cell::new(&template_entry.path.path().display().to_string()),
+            ]));
+        }
+
+        table.printstd();
+    }
 }
 
 fn build_cli_app() -> App<'static, 'static> {
@@ -73,49 +101,7 @@ fn ask(question: String) -> Option<String> {
     answer
 }
 
-fn build_template(template_entry: &mut TemplateEntry) {
-    // template render
-    let mut context = Context::new();
-    println!("Now we will set some options before render template");
-
-    for template_option in template_entry.template.options.clone().into_iter() {
-        let value = match ask(template_option.name.clone()) {
-            Some(value) => {
-                println!("value is '{}'", value);
-                value
-            },
-            None => {
-                println!("no value set, using default: '{:?}'", template_option.default);
-
-                match template_option.default {
-                    Some(value) => value,
-                    None => "".into(),
-                }
-            },
-        };
-
-        context.insert(template_option.id, &value);
-    }
-
-    let tera = match Tera::new(&template_entry.path.path().join("**/*").display().to_string()) {
-        Ok(t) => t,
-        Err(e) => {
-            panic!("Parsing error(s): {}", e);
-        }
-    };
-
-    template_entry.tera = Some(tera);
-    template_entry.context = Some(context);
-
-    println!("{:?}", template_entry);
-}
-
-fn generate_loop(templates: &mut HashMap<String, TemplateEntry>) {
-    let mut rl = Editor::<()>::new();
-    if rl.load_history("history.txt").is_err() {
-        println!("No previous history.");
-    }
-
+fn print_templates_table(templates: &mut HashMap<String, TemplateEntry>) {
     let mut table = Table::new();
     table.add_row(row!["id", "Name", "Path"]);
 
@@ -127,22 +113,58 @@ fn generate_loop(templates: &mut HashMap<String, TemplateEntry>) {
         ]));
     }
 
+    table.printstd();
+}
+
+fn console_loop(template_list: &mut TemplateEntryList) {
+    let theme = ColorfulTheme::default();
+
     loop {
-        table.printstd();
+        template_list.print_console_table();
 
-        match ask("Choose a template".into()) {
-            Some(template_key) => {
-                println!("choose '{}'", template_key);
+        let template_key = Select::with_theme(&theme)
+            .with_prompt("Choose a template to start")
+            .items(&template_list.keys)
+            .default(0)
+            .paged(true)
+            .interact()
+            .unwrap();
 
-                let template_entry = templates.get_mut(&template_key).unwrap();
-                build_template(template_entry);
+        println!("choose {:?}", template_list.keys.get(template_key));
 
-            },
-            None => {
-                println!("nothing choose, exit");
-                break;
-            }
+        let template_entry_id = template_list.keys.get(template_key).unwrap().clone();
+        let mut template_entry = template_list.templates.get_mut(&template_entry_id).unwrap();
+        let mut context = Context::new();
+        let term = Term::buffered_stderr();
+
+        println!("Now we will set some options before render template");
+
+        for template_option in template_entry.template.options.clone().into_iter() {
+            let default = match template_option.default {
+                Some(value) => value,
+                None => "".into(),
+            };
+
+            let value = Input::with_theme(&theme)
+                .with_prompt(template_option.name.clone())
+                .default(&default)
+                .interact_text_on(&term)
+                .unwrap();
+
+            context.insert(template_option.id, value);
         }
+
+        let tera = match Tera::new(&template_entry.path.path().join("**/*").display().to_string()) {
+            Ok(t) => t,
+            Err(e) => {
+                panic!("Parsing error(s): {}", e);
+            }
+        };
+
+        template_entry.tera = Some(tera);
+        template_entry.context = Some(context);
+
+        println!("{:?}", template_entry);
     }
 }
 
@@ -153,6 +175,11 @@ fn main() {
 
     // template config
     let mut templates: HashMap<String, TemplateEntry> = HashMap::new();
+    let mut template_list = TemplateEntryList {
+        keys: vec![],
+        templates: HashMap::new(),
+    };
+
     let base_path = "templates/";
     let templates_dir = read_dir(base_path);
 
@@ -186,16 +213,18 @@ fn main() {
         let template: Template = serde_json::from_reader(config_file.unwrap()).unwrap();
         println!("{:?}", template);
 
-        templates.insert(template.id.clone(), TemplateEntry {
+        template_list.keys.push(template.id.clone());
+        template_list.templates.insert(template.id.clone(), TemplateEntry {
             template,
             path: template_dir,
             context: None,
             tera: None,
         });
+
     }
 
-    println!("{:?}", templates);
-    generate_loop(&mut templates);
+    println!("{:?}", template_list);
+    console_loop(&mut template_list);
 
     // template engine
     let tera = match Tera::new("templates/**/*") {

@@ -39,6 +39,19 @@ pub struct TemplateEntry {
     path: DirEntry,
 }
 
+impl TemplateEntry {
+    pub fn render(&mut self) -> Option<String> {
+        let tera = self.tera.as_ref().unwrap();
+        let mut context = self.context.as_mut().unwrap();
+
+        let env_target = tera.render(".env.example", context);
+
+        println!("{:?}", env_target);
+
+        env_target.ok()
+    }
+}
+
 #[derive(Debug)]
 pub struct TemplateEntryList {
     keys: Vec<String>,
@@ -145,13 +158,13 @@ fn console_loop(template_list: &mut TemplateEntryList) {
                 None => "".into(),
             };
 
-            let value = Input::with_theme(&theme)
+            let value = Input::<String>::with_theme(&theme)
                 .with_prompt(template_option.name.clone())
-                .default(&default)
+                .default(default.into())
                 .interact_text_on(&term)
                 .unwrap();
 
-            context.insert(template_option.id, value);
+            context.insert(template_option.id, &value);
         }
 
         let tera = match Tera::new(&template_entry.path.path().join("**/*").display().to_string()) {
@@ -164,7 +177,9 @@ fn console_loop(template_list: &mut TemplateEntryList) {
         template_entry.tera = Some(tera);
         template_entry.context = Some(context);
 
-        println!("{:?}", template_entry);
+        println!("{:?}", &template_entry);
+
+        template_entry.render();
     }
 }
 

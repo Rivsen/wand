@@ -12,7 +12,7 @@ use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use prettytable::{Table, Row, Cell};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TemplateOption {
     id: String,
     name: String,
@@ -20,7 +20,7 @@ pub struct TemplateOption {
     required: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Template {
     id: String,
     name: String,
@@ -73,7 +73,44 @@ fn ask(question: String) -> Option<String> {
     answer
 }
 
-fn generate_loop(templates: HashMap<String, TemplateEntry>) {
+fn build_template(template_entry: &mut TemplateEntry) {
+    // template render
+    let mut context = Context::new();
+    println!("Now we will set some options before render template");
+
+    for template_option in template_entry.template.options.clone().into_iter() {
+        let value = match ask(template_option.name.clone()) {
+            Some(value) => {
+                println!("value is '{}'", value);
+                value
+            },
+            None => {
+                println!("no value set, using default: '{:?}'", template_option.default);
+
+                match template_option.default {
+                    Some(value) => value,
+                    None => "".into(),
+                }
+            },
+        };
+
+        context.insert(template_option.id, &value);
+    }
+
+    let tera = match Tera::new(&template_entry.path.path().join("**/*").display().to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            panic!("Parsing error(s): {}", e);
+        }
+    };
+
+    template_entry.tera = Some(tera);
+    template_entry.context = Some(context);
+
+    println!("{:?}", template_entry);
+}
+
+fn generate_loop(templates: &mut HashMap<String, TemplateEntry>) {
     let mut rl = Editor::<()>::new();
     if rl.load_history("history.txt").is_err() {
         println!("No previous history.");
@@ -82,7 +119,7 @@ fn generate_loop(templates: HashMap<String, TemplateEntry>) {
     let mut table = Table::new();
     table.add_row(row!["id", "Name", "Path"]);
 
-    for (_, template_entry) in templates {
+    for (_, template_entry) in templates.into_iter() {
         table.add_row(Row::new(vec![
             Cell::new(&template_entry.template.id),
             Cell::new(&template_entry.template.name),
@@ -94,7 +131,13 @@ fn generate_loop(templates: HashMap<String, TemplateEntry>) {
         table.printstd();
 
         match ask("Choose a template".into()) {
-            Some(template_key) => println!("choose '{}'", template_key),
+            Some(template_key) => {
+                println!("choose '{}'", template_key);
+
+                let template_entry = templates.get_mut(&template_key).unwrap();
+                build_template(template_entry);
+
+            },
             None => {
                 println!("nothing choose, exit");
                 break;
@@ -143,17 +186,6 @@ fn main() {
         let template: Template = serde_json::from_reader(config_file.unwrap()).unwrap();
         println!("{:?}", template);
 
-        // for template_option in template.options {
-        //     println!("{:?}", template_option);
-        // }
-        //
-        // let tera = match Tera::new(template_dir.path().join("**/*").into()) {
-        //     Ok(t) => t,
-        //     Err(e) => {
-        //         panic!("Parsing error(s): {}", e);
-        //     }
-        // };
-
         templates.insert(template.id.clone(), TemplateEntry {
             template,
             path: template_dir,
@@ -163,7 +195,7 @@ fn main() {
     }
 
     println!("{:?}", templates);
-    generate_loop(templates);
+    generate_loop(&mut templates);
 
     // template engine
     let tera = match Tera::new("templates/**/*") {

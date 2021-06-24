@@ -7,12 +7,14 @@ use clap::{App};
 use tera::{Tera, Context};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-use std::fs::{read_dir, File, DirEntry};
+use std::fs::{read_dir, File, DirEntry, create_dir_all};
 use prettytable::{Table, Row, Cell};
 use console::Term;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Select, Input};
 use std::borrow::BorrowMut;
+use std::ops::Index;
+use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TemplateOption {
@@ -31,25 +33,45 @@ pub struct Template {
 
 #[derive(Debug)]
 pub struct TemplateEntry {
+    template_id: String,
     template: Template,
     tera: Option<Tera>,
     context: Option<Context>,
     path: DirEntry,
+    target_path: Option<String>,
 }
 
 impl TemplateEntry {
-    pub fn render(&mut self) -> Option<String> {
+    pub fn render(&mut self) {
+        let template_id = self.template_id.clone();
+        let target_path = match self.target_path.clone() {
+            None => panic!("Not set output directory"),
+            Some(t) => t,
+        };
+
         let (tera, context) = self.get_mut_tera_and_context();
 
-        for t in &tera.templates {
-            println!("{:?}", t);
+        match create_dir_all(target_path.clone()) {
+            Err(e) => panic!("Cannot create target path, {}", e),
+            _ => {},
         }
 
-        let env_target = tera.render(".env.example", context);
+        for (template_name, template) in &tera.templates {
+            //println!("{:?}, {:?}", template_name, template);
+            let output_file = format!("{}/{}/{}", &target_path, &template_id, template.path.as_ref().unwrap());
+            let output_file_path = PathBuf::from(output_file);
+            let output_dir = output_file_path.parent().unwrap();
 
-        println!("{:?}", env_target);
+            println!("{:?}", output_dir);
 
-        env_target.ok()
+            create_dir_all(output_dir);
+        }
+
+        // let env_target = tera.render(".env.example", context);
+        //
+        // println!("{:?}", env_target);
+        //
+        // env_target.ok()
     }
 
     pub fn init_tera(&mut self) {
@@ -137,7 +159,7 @@ fn console_loop(template_list: &mut TemplateEntryList) {
     loop {
         template_list.print_console_table();
 
-        let template_key = Select::with_theme(&theme)
+        let mut template_key = Select::with_theme(&theme)
             .with_prompt("Choose a template to start")
             .items(&template_list.keys)
             .default(0)
@@ -146,6 +168,14 @@ fn console_loop(template_list: &mut TemplateEntryList) {
             .unwrap();
 
         println!("choose {:?}", template_list.keys.get(template_key));
+
+        if template_key == 0 {
+            println!("Byebye~");
+
+            return;
+        }
+
+        template_key -= 1;
 
         let template_entry_id = template_list.keys.get(template_key).unwrap().clone();
         let mut template_entry = template_list.templates.get_mut(&template_entry_id).unwrap();
@@ -182,7 +212,7 @@ fn main() {
     // template config
     let mut templates: HashMap<String, TemplateEntry> = HashMap::new();
     let mut template_list = TemplateEntryList {
-        keys: vec![],
+        keys: vec!["Exit".into()],
         templates: HashMap::new(),
     };
 
@@ -221,10 +251,12 @@ fn main() {
 
         template_list.keys.push(template.id.clone());
         template_list.templates.insert(template.id.clone(), TemplateEntry {
+            template_id: template.id.clone(),
             template,
             path: template_dir,
             context: None,
             tera: None,
+            target_path: Some("./output".into()),
         });
 
     }

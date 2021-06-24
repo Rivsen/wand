@@ -12,9 +12,10 @@ use prettytable::{Table, Row, Cell};
 use console::Term;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Select, Input};
-use std::borrow::BorrowMut;
-use std::ops::Index;
 use std::path::PathBuf;
+use log::{info, warn, debug};
+
+const LOG_TARGET: &str = "wand";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TemplateOption {
@@ -44,12 +45,16 @@ pub struct TemplateEntry {
 impl TemplateEntry {
     pub fn render(&mut self) {
         let template_id = self.template_id.clone();
-        let target_path = match self.target_path.clone() {
+        let mut target_path = match self.target_path.clone() {
             None => panic!("Not set output directory"),
             Some(t) => t,
         };
 
         let (tera, context) = self.get_mut_tera_and_context();
+
+        target_path = target_path.trim_end_matches("/").into();
+        target_path.push_str("/");
+        target_path.push_str(&template_id.clone());
 
         match create_dir_all(target_path.clone()) {
             Err(e) => panic!("Cannot create target path, {}", e),
@@ -57,25 +62,32 @@ impl TemplateEntry {
         }
 
         for (template_name, template) in &tera.templates {
-            println!("{:?}, {:?}", template_name, template);
-            let output_file = format!("{}/{}/{}", &target_path, &template_id, template.name.clone());
+
+            debug!(target: LOG_TARGET, "find a template: {:?}, {:?}", template_name, template);
+
+            let output_file = format!("{}/{}", &target_path, template.name.clone());
             let output_file_path = PathBuf::from(output_file.clone());
             let output_dir = output_file_path.parent().unwrap();
 
-            println!("{:?}", output_dir);
+            debug!(target: LOG_TARGET, "will put file at '{:?}'", output_file.clone());
 
-            create_dir_all(output_dir);
-            tera.render_to(template_name, context, File::create(output_file.clone()).unwrap());
+            if let Err(e) = create_dir_all(output_dir) {
+                panic!("create directory failed: {:?}", e);
+            }
+
+            if let Err(e) = tera.render_to(template_name, context, File::create(output_file.clone()).unwrap()) {
+                panic!("file '{:?}' render failed: {:?}", output_file.clone(), e);
+            }
+
+            info!(target: LOG_TARGET, "file '{:?}' rendered", output_file.clone());
         }
 
-        // let env_target = tera.render(".env.example", context);
-        //
-        // println!("{:?}", env_target);
-        //
-        // env_target.ok()
+        println!("project '{:?}' generated at '{:?}' directory", template_id.clone(), target_path.clone());
     }
 
     pub fn init_tera(&mut self) {
+        debug!(target: LOG_TARGET, "init tera template engine");
+
         if let Some(_) = self.tera {
             return;
         }
@@ -91,6 +103,8 @@ impl TemplateEntry {
     }
 
     pub fn init_context(&mut self) {
+        debug!(target: LOG_TARGET, "init tera template context");
+
         if let Some(_) = self.context {
             return;
         }
@@ -121,7 +135,7 @@ impl TemplateEntry {
     }
 
     pub fn context_insert<T: Serialize + ?Sized, S: Into<String>>(&mut self, key: S, val: &T) {
-        let mut context = self.get_mut_context();
+        let context = self.get_mut_context();
         context.insert(key, val);
     }
 }
@@ -160,7 +174,7 @@ fn console_loop(template_list: &mut TemplateEntryList) {
     loop {
         template_list.print_console_table();
 
-        let mut template_key = Select::with_theme(&theme)
+        let template_key = Select::with_theme(&theme)
             .with_prompt("Choose a template to start")
             .items(&template_list.keys)
             .default(0)
@@ -168,21 +182,18 @@ fn console_loop(template_list: &mut TemplateEntryList) {
             .interact()
             .unwrap();
 
-        println!("choose {:?}", template_list.keys.get(template_key));
+        debug!(target: LOG_TARGET, "choose {:?}", template_list.keys.get(template_key));
 
         if template_key == 0 {
-            println!("Byebye~");
-
+            println!("Bye bye~");
             return;
         }
 
-        // template_key -= 1;
-
         let template_entry_id = template_list.keys.get(template_key).unwrap().clone();
-        let mut template_entry = template_list.templates.get_mut(&template_entry_id).unwrap();
+        let template_entry = template_list.templates.get_mut(&template_entry_id).unwrap();
         let term = Term::buffered_stderr();
 
-        println!("Now we will set some options before render template");
+        println!("Now we will set some options before render template:");
 
         for template_option in template_entry.template.options.clone().into_iter() {
             let default = match template_option.default {
@@ -200,18 +211,16 @@ fn console_loop(template_list: &mut TemplateEntryList) {
         }
 
         template_entry.render();
-
-        println!("{:?}", &template_entry);
     }
 }
 
 fn main() {
+    env_logger::init();
     // cli app
     let app = build_cli_app();
     app.get_matches();
 
     // template config
-    let mut templates: HashMap<String, TemplateEntry> = HashMap::new();
     let mut template_list = TemplateEntryList {
         keys: vec!["Exit".into()],
         templates: HashMap::new(),
@@ -231,16 +240,17 @@ fn main() {
             Err(e) => panic!("Read files error: {}", e),
         };
 
-        println!("template: {:?}", template_dir.path());
+        info!(target: LOG_TARGET, "load template: {:?}", template_dir.path());
 
         if !template_dir.path().is_dir() {
-            println!("{:?} not a directory, continue", template_dir.path());
-
+            warn!(target: LOG_TARGET, "{:?} not a directory, continue", template_dir.path());
             continue;
         }
 
         let config_file_dir = template_dir.path().join("config.json");
-        println!("{:?}", config_file_dir);
+
+        debug!(target: LOG_TARGET, "read template config: {:?}", config_file_dir);
+
         let config_file = File::open(config_file_dir);
 
         if let Err(e) = config_file {
@@ -248,7 +258,8 @@ fn main() {
         }
 
         let template: Template = serde_json::from_reader(config_file.unwrap()).unwrap();
-        println!("{:?}", template);
+
+        debug!(target: LOG_TARGET, "got a valid template: {:?}", template);
 
         template_list.keys.push(template.id.clone());
         template_list.templates.insert(template.id.clone(), TemplateEntry {
@@ -262,21 +273,5 @@ fn main() {
 
     }
 
-    println!("{:?}", template_list);
     console_loop(&mut template_list);
-
-    // template engine
-    let tera = match Tera::new("templates/**/*") {
-        Ok(t) => t,
-        Err(e) => {
-            panic!("Parsing error(s): {}", e);
-        }
-    };
-
-    // template render
-    let mut context = Context::new();
-    context.insert("server_workers", &16);
-
-    let test_env = tera.render("actix-web/.env.example", &context);
-    println!("{:?}", test_env);
 }

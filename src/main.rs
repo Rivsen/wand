@@ -8,13 +8,11 @@ use tera::{Tera, Context};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use std::fs::{read_dir, File, DirEntry};
-use rustyline::Editor;
-use rustyline::error::ReadlineError;
 use prettytable::{Table, Row, Cell};
 use console::Term;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Select, Input};
-use std::borrow::Borrow;
+use std::borrow::BorrowMut;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TemplateOption {
@@ -41,14 +39,67 @@ pub struct TemplateEntry {
 
 impl TemplateEntry {
     pub fn render(&mut self) -> Option<String> {
-        let tera = self.tera.as_ref().unwrap();
-        let mut context = self.context.as_mut().unwrap();
+        let (tera, context) = self.get_mut_tera_and_context();
+
+        for t in &tera.templates {
+            println!("{:?}", t);
+        }
 
         let env_target = tera.render(".env.example", context);
 
         println!("{:?}", env_target);
 
         env_target.ok()
+    }
+
+    pub fn init_tera(&mut self) {
+        if let Some(_) = self.tera {
+            return;
+        }
+
+        let tera = match Tera::new(&self.path.path().join("**/*").display().to_string()) {
+            Ok(t) => t,
+            Err(e) => {
+                panic!("Parsing {:?} templates error(s): {}", self, e);
+            }
+        };
+
+        self.tera = Some(tera);
+    }
+
+    pub fn init_context(&mut self) {
+        if let Some(_) = self.context {
+            return;
+        }
+
+        self.context = Some(Context::new());
+    }
+
+    pub fn get_mut_tera(&mut self) -> &mut Tera {
+        self.init_tera();
+        self.tera.as_mut().unwrap()
+    }
+
+    pub fn get_tera(&mut self) -> &Tera {
+        self.init_tera();
+        self.tera.as_ref().unwrap()
+    }
+
+    pub fn get_mut_context(&mut self) -> &mut Context {
+        self.init_context();
+        self.context.as_mut().unwrap()
+    }
+
+    pub fn get_mut_tera_and_context(&mut self) -> (&mut Tera, &mut Context) {
+        self.init_tera();
+        self.init_context();
+
+        return (self.tera.as_mut().unwrap(), self.context.as_mut().unwrap());
+    }
+
+    pub fn context_insert<T: Serialize + ?Sized, S: Into<String>>(&mut self, key: S, val: &T) {
+        let mut context = self.get_mut_context();
+        context.insert(key, val);
     }
 }
 
@@ -80,55 +131,6 @@ fn build_cli_app() -> App<'static, 'static> {
     App::new("My Wand")
 }
 
-fn ask(question: String) -> Option<String> {
-    let mut rl = Editor::<()>::new();
-
-    if rl.load_history("history.txt").is_err() {
-        // println!("No previous history.");
-    }
-
-    println!("{}", question);
-    let readline = rl.readline(">> ");
-
-    let answer = match readline {
-        Ok(line) => {
-            rl.add_history_entry(line.as_str());
-            Some(line)
-        },
-        Err(ReadlineError::Interrupted) => {
-            println!("CTRL-C");
-            None
-        },
-        Err(ReadlineError::Eof) => {
-            println!("CTRL-D");
-            None
-        },
-        Err(err) => {
-            println!("Error: {:?}", err);
-            None
-        }
-    };
-
-    rl.save_history("history.txt").unwrap();
-
-    answer
-}
-
-fn print_templates_table(templates: &mut HashMap<String, TemplateEntry>) {
-    let mut table = Table::new();
-    table.add_row(row!["id", "Name", "Path"]);
-
-    for (_, template_entry) in templates.into_iter() {
-        table.add_row(Row::new(vec![
-            Cell::new(&template_entry.template.id),
-            Cell::new(&template_entry.template.name),
-            Cell::new(&template_entry.path.path().display().to_string()),
-        ]));
-    }
-
-    table.printstd();
-}
-
 fn console_loop(template_list: &mut TemplateEntryList) {
     let theme = ColorfulTheme::default();
 
@@ -147,7 +149,6 @@ fn console_loop(template_list: &mut TemplateEntryList) {
 
         let template_entry_id = template_list.keys.get(template_key).unwrap().clone();
         let mut template_entry = template_list.templates.get_mut(&template_entry_id).unwrap();
-        let mut context = Context::new();
         let term = Term::buffered_stderr();
 
         println!("Now we will set some options before render template");
@@ -164,22 +165,12 @@ fn console_loop(template_list: &mut TemplateEntryList) {
                 .interact_text_on(&term)
                 .unwrap();
 
-            context.insert(template_option.id, &value);
+            template_entry.context_insert(template_option.id, &value);
         }
 
-        let tera = match Tera::new(&template_entry.path.path().join("**/*").display().to_string()) {
-            Ok(t) => t,
-            Err(e) => {
-                panic!("Parsing error(s): {}", e);
-            }
-        };
-
-        template_entry.tera = Some(tera);
-        template_entry.context = Some(context);
+        template_entry.render();
 
         println!("{:?}", &template_entry);
-
-        template_entry.render();
     }
 }
 

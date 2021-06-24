@@ -1,0 +1,7 @@
+{
+	"id": "hello-world-php",
+	"name": "A php hello world template",
+	"options": [
+		{"id":"someone", "name":"hello to someone", "default":"world", "required":true}
+	]
+}

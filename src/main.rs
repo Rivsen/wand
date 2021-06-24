@@ -57,14 +57,15 @@ impl TemplateEntry {
         }
 
         for (template_name, template) in &tera.templates {
-            //println!("{:?}, {:?}", template_name, template);
-            let output_file = format!("{}/{}/{}", &target_path, &template_id, template.path.as_ref().unwrap());
-            let output_file_path = PathBuf::from(output_file);
+            println!("{:?}, {:?}", template_name, template);
+            let output_file = format!("{}/{}/{}", &target_path, &template_id, template.name.clone());
+            let output_file_path = PathBuf::from(output_file.clone());
             let output_dir = output_file_path.parent().unwrap();
 
             println!("{:?}", output_dir);
 
             create_dir_all(output_dir);
+            tera.render_to(template_name, context, File::create(output_file.clone()).unwrap());
         }
 
         // let env_target = tera.render(".env.example", context);
@@ -175,7 +176,7 @@ fn console_loop(template_list: &mut TemplateEntryList) {
             return;
         }
 
-        template_key -= 1;
+        // template_key -= 1;
 
         let template_entry_id = template_list.keys.get(template_key).unwrap().clone();
         let mut template_entry = template_list.templates.get_mut(&template_entry_id).unwrap();

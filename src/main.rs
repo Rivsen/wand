@@ -2,6 +2,7 @@
 extern crate prettytable;
 extern crate clap;
 extern crate tera;
+extern crate wand;
 
 use clap::{App};
 use tera::{Tera, Context};
@@ -45,7 +46,6 @@ pub struct TemplateEntry {
 pub struct Project {
     name: String,
     template_id: Option<String>,
-    template: Option<TemplateEntry>,
     tera: Option<Tera>,
     context: Option<Context>,
     target_path: Option<String>,
@@ -56,41 +56,10 @@ impl Project {
         Project {
             name,
             template_id: None,
-            template: None,
             tera: None,
             context: None,
             target_path: None,
         }
-    }
-
-    pub fn set_template(&mut self, template_entry: TemplateEntry) {
-        self.template_id = Some(template_entry.template_id.clone());
-        self.template = Some(template_entry);
-    }
-
-    pub fn init_tera(&mut self) {
-        debug!(target: LOG_TARGET, "init tera template engine");
-
-        if let Some(_) = self.tera {
-            return;
-        }
-
-        let mut template = match &mut self.template {
-            None => panic!("No template set"),
-            Some(ref mut t) => t,
-        };
-
-        self.tera = Some(template.init_tera());
-    }
-
-    pub fn init_context(&mut self) {
-        debug!(target: LOG_TARGET, "init tera template context");
-
-        if let Some(_) = self.context {
-            return;
-        }
-
-        self.context = Some(Context::new());
     }
 
     pub fn get_mut_tera_and_context(&mut self) -> (&mut Tera, &mut Context) {
@@ -280,9 +249,19 @@ impl TemplateEntryList {
                 return;
             }
 
+            let term = Term::buffered_stderr();
             let template_entry_id = self.keys.get(template_key).unwrap().clone();
             let template_entry = self.templates.get_mut(&template_entry_id).unwrap();
-            let term = Term::buffered_stderr();
+
+            let project_name = Input::<String>::with_theme(&theme)
+                .with_prompt("Type a name for new project")
+                .interact_text_on(&term)
+                .unwrap();
+
+            let mut project = Project::new(project_name);
+            project.template_id = Some(template_entry_id.clone());
+            project.tera = Some(template_entry.init_tera());
+            project.context = Some(Context::new());
 
             println!("Now we will set some options before render template:");
 
@@ -312,7 +291,6 @@ fn build_cli_app() -> App<'static, 'static> {
 
 fn main() {
     env_logger::init();
-    test();
 
     // cli app
     let app = build_cli_app();

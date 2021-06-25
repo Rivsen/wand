@@ -42,6 +42,75 @@ pub struct TemplateEntry {
     target_path: Option<String>,
 }
 
+pub struct Project {
+    name: String,
+    template_id: Option<String>,
+    template: Option<TemplateEntry>,
+    tera: Option<Tera>,
+    context: Option<Context>,
+    target_path: Option<String>,
+}
+
+impl Project {
+    pub fn new(name: String) -> Project {
+        Project {
+            name,
+            template_id: None,
+            template: None,
+            tera: None,
+            context: None,
+            target_path: None,
+        }
+    }
+
+    pub fn set_template(&mut self, template_entry: TemplateEntry) {
+        self.template_id = Some(template_entry.template_id.clone());
+        self.template = Some(template_entry);
+    }
+
+    pub fn init_tera(&mut self) {
+        debug!(target: LOG_TARGET, "init tera template engine");
+
+        if let Some(_) = self.tera {
+            return;
+        }
+
+        let mut template = match &mut self.template {
+            None => panic!("No template set"),
+            Some(ref mut t) => t,
+        };
+
+        self.tera = Some(template.init_tera());
+    }
+
+    pub fn init_context(&mut self) {
+        debug!(target: LOG_TARGET, "init tera template context");
+
+        if let Some(_) = self.context {
+            return;
+        }
+
+        self.context = Some(Context::new());
+    }
+
+    pub fn get_mut_tera_and_context(&mut self) -> (&mut Tera, &mut Context) {
+        self.init_tera();
+        self.init_context();
+
+        return (self.tera.as_mut().unwrap(), self.context.as_mut().unwrap());
+    }
+
+    pub fn get_mut_context(&mut self) -> &mut Context {
+        self.init_context();
+        self.context.as_mut().unwrap()
+    }
+
+    pub fn context_insert<T: Serialize + ?Sized, S: Into<String>>(&mut self, key: S, val: &T) {
+        let context = self.get_mut_context();
+        context.insert(key, val);
+    }
+}
+
 impl TemplateEntry {
     pub fn render(&mut self) {
         let template_id = self.template_id.clone();
@@ -85,31 +154,15 @@ impl TemplateEntry {
         println!("project '{:?}' generated at '{:?}' directory", template_id.clone(), target_path.clone());
     }
 
-    pub fn init_tera(&mut self) {
+    pub fn init_tera(&mut self) -> Tera {
         debug!(target: LOG_TARGET, "init tera template engine");
 
-        if let Some(_) = self.tera {
-            return;
-        }
-
-        let tera = match Tera::new(&self.path.path().join("**/*").display().to_string()) {
+        match Tera::new(&self.path.path().join("**/*").display().to_string()) {
             Ok(t) => t,
             Err(e) => {
                 panic!("Parsing {:?} templates error(s): {}", self, e);
             }
-        };
-
-        self.tera = Some(tera);
-    }
-
-    pub fn init_context(&mut self) {
-        debug!(target: LOG_TARGET, "init tera template context");
-
-        if let Some(_) = self.context {
-            return;
         }
-
-        self.context = Some(Context::new());
     }
 
     pub fn get_mut_tera(&mut self) -> &mut Tera {
@@ -121,32 +174,75 @@ impl TemplateEntry {
         self.init_tera();
         self.tera.as_ref().unwrap()
     }
-
-    pub fn get_mut_context(&mut self) -> &mut Context {
-        self.init_context();
-        self.context.as_mut().unwrap()
-    }
-
-    pub fn get_mut_tera_and_context(&mut self) -> (&mut Tera, &mut Context) {
-        self.init_tera();
-        self.init_context();
-
-        return (self.tera.as_mut().unwrap(), self.context.as_mut().unwrap());
-    }
-
-    pub fn context_insert<T: Serialize + ?Sized, S: Into<String>>(&mut self, key: S, val: &T) {
-        let context = self.get_mut_context();
-        context.insert(key, val);
-    }
 }
 
 #[derive(Debug)]
 pub struct TemplateEntryList {
     keys: Vec<String>,
     templates: HashMap<String, TemplateEntry>,
+    projects: HashMap<String, Project>,
+    internal_path: String,
+    external_paths: Vec<String>,
 }
 
 impl TemplateEntryList {
+    pub fn add_a_template_path(&mut self, path: String) {
+        let templates_dir = read_dir(path);
+
+        let templates_dir = match templates_dir {
+            Ok(t) => t,
+            Err(e) => panic!("Load templates error: {}", e),
+        };
+
+        for template_dir in templates_dir {
+            let template_dir = match template_dir {
+                Ok(t) => t,
+                Err(e) => panic!("Read files error: {}", e),
+            };
+
+            info!(target: LOG_TARGET, "load template: {:?}", template_dir.path());
+
+            if !template_dir.path().is_dir() {
+                warn!(target: LOG_TARGET, "{:?} not a directory, continue", template_dir.path());
+                continue;
+            }
+
+            let config_file_dir = template_dir.path().join("config.json");
+
+            debug!(target: LOG_TARGET, "read template config: {:?}", config_file_dir);
+
+            let config_file = File::open(config_file_dir);
+
+            if let Err(e) = config_file {
+                panic!("Read files error: {}", e);
+            }
+
+            let template: Template = serde_json::from_reader(config_file.unwrap()).unwrap();
+
+            debug!(target: LOG_TARGET, "got a valid template: {:?}", template);
+
+            self.keys.push(template.id.clone());
+            self.templates.insert(template.id.clone(), TemplateEntry {
+                template_id: template.id.clone(),
+                template,
+                path: template_dir,
+                context: None,
+                tera: None,
+                target_path: Some("./output".into()),
+            });
+        }
+    }
+
+    pub fn start(&mut self) {
+        self.add_a_template_path(self.internal_path.clone());
+
+        for external_path in self.external_paths {
+            self.add_a_template_path(external_path.clone());
+        }
+
+        self.console_loop();
+    }
+
     pub fn print_console_table(&self) {
         let mut table = Table::new();
         let templates = &self.templates;
@@ -162,116 +258,74 @@ impl TemplateEntryList {
 
         table.printstd();
     }
+
+    pub fn console_loop(&mut self) {
+        let theme = ColorfulTheme::default();
+
+        loop {
+            self.print_console_table();
+
+            let template_key = Select::with_theme(&theme)
+                .with_prompt("Choose a template to start")
+                .items(&self.keys)
+                .default(0)
+                .paged(true)
+                .interact()
+                .unwrap();
+
+            debug!(target: LOG_TARGET, "choose {:?}", self.keys.get(template_key));
+
+            if template_key == 0 {
+                println!("Bye bye~");
+                return;
+            }
+
+            let template_entry_id = self.keys.get(template_key).unwrap().clone();
+            let template_entry = self.templates.get_mut(&template_entry_id).unwrap();
+            let term = Term::buffered_stderr();
+
+            println!("Now we will set some options before render template:");
+
+            for template_option in template_entry.template.options.clone().into_iter() {
+                let default = match template_option.default {
+                    Some(value) => value,
+                    None => "".into(),
+                };
+
+                let value = Input::<String>::with_theme(&theme)
+                    .with_prompt(template_option.name.clone())
+                    .default(default.into())
+                    .interact_text_on(&term)
+                    .unwrap();
+
+                template_entry.context_insert(template_option.id, &value);
+            }
+
+            template_entry.render();
+        }
+    }
 }
 
 fn build_cli_app() -> App<'static, 'static> {
     App::new("My Wand")
 }
 
-fn console_loop(template_list: &mut TemplateEntryList) {
-    let theme = ColorfulTheme::default();
-
-    loop {
-        template_list.print_console_table();
-
-        let template_key = Select::with_theme(&theme)
-            .with_prompt("Choose a template to start")
-            .items(&template_list.keys)
-            .default(0)
-            .paged(true)
-            .interact()
-            .unwrap();
-
-        debug!(target: LOG_TARGET, "choose {:?}", template_list.keys.get(template_key));
-
-        if template_key == 0 {
-            println!("Bye bye~");
-            return;
-        }
-
-        let template_entry_id = template_list.keys.get(template_key).unwrap().clone();
-        let template_entry = template_list.templates.get_mut(&template_entry_id).unwrap();
-        let term = Term::buffered_stderr();
-
-        println!("Now we will set some options before render template:");
-
-        for template_option in template_entry.template.options.clone().into_iter() {
-            let default = match template_option.default {
-                Some(value) => value,
-                None => "".into(),
-            };
-
-            let value = Input::<String>::with_theme(&theme)
-                .with_prompt(template_option.name.clone())
-                .default(default.into())
-                .interact_text_on(&term)
-                .unwrap();
-
-            template_entry.context_insert(template_option.id, &value);
-        }
-
-        template_entry.render();
-    }
-}
-
 fn main() {
     env_logger::init();
+    test();
+
     // cli app
     let app = build_cli_app();
     app.get_matches();
 
     // template config
     let mut template_list = TemplateEntryList {
+        internal_path: "templates/".into(),
+        external_paths: vec![],
         keys: vec!["Exit".into()],
         templates: HashMap::new(),
+        projects: HashMap::new(),
     };
 
-    let base_path = "templates/";
-    let templates_dir = read_dir(base_path);
-
-    let templates_dir = match templates_dir {
-        Ok(t) => t,
-        Err(e) => panic!("Load templates error: {}", e),
-    };
-
-    for template_dir in templates_dir {
-        let template_dir = match template_dir {
-            Ok(t) => t,
-            Err(e) => panic!("Read files error: {}", e),
-        };
-
-        info!(target: LOG_TARGET, "load template: {:?}", template_dir.path());
-
-        if !template_dir.path().is_dir() {
-            warn!(target: LOG_TARGET, "{:?} not a directory, continue", template_dir.path());
-            continue;
-        }
-
-        let config_file_dir = template_dir.path().join("config.json");
-
-        debug!(target: LOG_TARGET, "read template config: {:?}", config_file_dir);
-
-        let config_file = File::open(config_file_dir);
-
-        if let Err(e) = config_file {
-            panic!("Read files error: {}", e);
-        }
-
-        let template: Template = serde_json::from_reader(config_file.unwrap()).unwrap();
-
-        debug!(target: LOG_TARGET, "got a valid template: {:?}", template);
-
-        template_list.keys.push(template.id.clone());
-        template_list.templates.insert(template.id.clone(), TemplateEntry {
-            template_id: template.id.clone(),
-            template,
-            path: template_dir,
-            context: None,
-            tera: None,
-            target_path: Some("./output".into()),
-        });
-
-    }
-
-    console_loop(&mut template_list);
+    template_list.start();
 }

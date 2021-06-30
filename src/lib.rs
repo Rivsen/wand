@@ -1,6 +1,20 @@
+#[macro_use]
+extern crate prettytable;
+
 use std::collections::HashMap;
 use tera::{Tera, Context};
-use std::fs::{read_dir, File};
+use std::fs::{read_dir, File, create_dir_all};
+use dialoguer::theme::ColorfulTheme;
+use prettytable::{Table, Row, Cell};
+use dialoguer::{Select, Input};
+use console::Term;
+use log::{info, warn, debug};
+use std::ops::Add;
+use serde::{Serialize, Deserialize};
+use std::path::PathBuf;
+use std::borrow::{Borrow, BorrowMut};
+
+pub const LOG_TARGET: &str = "wand";
 
 pub struct TemplateEntryList {
     keys: Vec<String>,
@@ -14,12 +28,14 @@ pub struct TemplateEntry {
     config: TemplateConfig,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TemplateConfig {
     id: String,
     name: String,
     options: Vec<TemplateEntryOption>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TemplateEntryOption {
     id: String,
     name: String,
@@ -42,28 +58,176 @@ pub struct Project {
     output_path: Option<String>,
 }
 
+impl Project {
+    fn new(name: String) -> Project {
+        Project {
+            name,
+            template_id: None,
+            tera: None,
+            context: None,
+            output_path: Some("./output".to_string()),
+        }
+    }
+
+    pub fn init_tera(&mut self, path: String) {
+        let path = path.trim_end_matches("/").to_string().add("**/*");
+
+        self.tera = Some(match Tera::new(&path) {
+            Ok(t) => t,
+            Err(e) => panic!("Parsing {:?} templates error(s): {}", path, e),
+        });
+    }
+
+    pub fn init_context(&mut self) {
+        self.context = Some(Context::new());
+    }
+
+    pub fn get_mut_context(&mut self) -> &mut Context {
+        self.init_context();
+        self.context.as_mut().unwrap()
+    }
+
+    pub fn get_mut_tera_and_context(&mut self) -> (&mut Tera, &mut Context) {
+        return (self.tera.as_mut().unwrap(), self.context.as_mut().unwrap());
+    }
+
+    pub fn context_insert<T: Serialize + ?Sized, S: Into<String>>(&mut self, key: S, val: &T) {
+        let context = self.get_mut_context();
+        context.insert(key, val);
+    }
+
+    pub fn render(&mut self) {
+        let template_id = self.template_id.clone().unwrap();
+        let project_name = self.name.clone();
+        let mut output_path = match self.output_path.clone() {
+            None => panic!("Not set output directory"),
+            Some(t) => t,
+        };
+
+        let (tera, context) = self.get_mut_tera_and_context();
+
+        output_path = output_path.trim_end_matches("/").into();
+        output_path.push_str("/");
+        output_path.push_str(&template_id.clone());
+
+        match create_dir_all(output_path.clone()) {
+            Err(e) => panic!("Cannot create target path, {}", e),
+            _ => {},
+        }
+
+        for (template_name, template) in &tera.templates {
+
+            debug!(target: LOG_TARGET, "find a template: {:?}, {:?}", template_name, template);
+
+            let output_file = format!("{}/{}", &output_path, project_name);
+            let output_file_path = PathBuf::from(output_file.clone());
+            let output_dir = output_file_path.parent().unwrap();
+
+            debug!(target: LOG_TARGET, "will put file at '{:?}'", output_file.clone());
+
+            if let Err(e) = create_dir_all(output_dir) {
+                panic!("create directory failed: {:?}", e);
+            }
+
+            if let Err(e) = tera.render_to(template_name, context, File::create(output_file.clone()).unwrap()) {
+                panic!("file '{:?}' render failed: {:?}", output_file.clone(), e);
+            }
+
+            info!(target: LOG_TARGET, "file '{:?}' rendered", output_file.clone());
+        }
+
+        println!("project '{:?}' generated at '{:?}' directory", template_id.clone(), output_path.clone());
+    }
+}
+
 impl ProjectWand {
     pub fn new() -> ProjectWand {
         ProjectWand {
             internal_path: "templates/".into(),
             external_paths: vec![],
-            template_list: TemplateEntryList {
-                keys: vec![],
-                templates: HashMap::new(),
-            },
+            template_list: TemplateEntryList::new(),
             projects: vec![],
         }
     }
 
     pub fn init(&mut self) {
+        self.template_list = TemplateEntryList::new();
         self.template_list.add_template_path(self.internal_path.clone());
 
-        for external_path in self.external_paths {
+        for external_path in self.external_paths.iter() {
             self.template_list.add_template_path(external_path.clone());
         }
     }
 
-    pub fn console_loop() {
+    pub fn print_console_table(&self) {
+        let mut table = Table::new();
+        table.add_row(row!["id", "Name", "Path"]);
+
+        for (_, template_entry) in self.template_list.templates.borrow().into_iter() {
+            table.add_row(Row::new(vec![
+                Cell::new(&template_entry.id),
+                Cell::new(&template_entry.name),
+                Cell::new(&template_entry.path),
+            ]));
+        }
+
+        table.printstd();
+    }
+
+    pub fn console_loop(&mut self) {
+        let theme = ColorfulTheme::default();
+
+        loop {
+            self.print_console_table();
+            let term = Term::buffered_stderr();
+
+            let project_name = Input::<String>::with_theme(&theme)
+                .with_prompt("Type a name for new project")
+                .interact_text_on(&term)
+                .unwrap();
+
+            let template_index = Select::with_theme(&theme)
+                .with_prompt("Choose a template to start")
+                .items(&self.template_list.keys)
+                .default(0)
+                .paged(true)
+                .interact_on(&term)
+                .unwrap();
+
+            debug!(target: LOG_TARGET, "choose {:?}", self.template_list.keys.get(template_index));
+
+            if template_index == 0 {
+                println!("Bye bye~");
+                return;
+            }
+
+            let template_entry_id = self.template_list.keys.get(template_index).unwrap().clone();
+            let template_entry = self.template_list.templates.get_mut(&template_entry_id).unwrap();
+
+            let mut project = Project::new(project_name);
+            project.template_id = Some(template_entry_id.clone());
+            project.init_tera(template_entry.path.clone());
+            project.init_context();
+
+            println!("Now we will set some options before render template:");
+
+            for template_option in template_entry.config.options.clone().into_iter() {
+                let default = match template_option.default {
+                    Some(value) => value,
+                    None => "".into(),
+                };
+
+                let value = Input::<String>::with_theme(&theme)
+                    .with_prompt(template_option.name.clone())
+                    .default(default.into())
+                    .interact_text_on(&term)
+                    .unwrap();
+
+                project.context_insert(template_option.id, &value);
+            }
+
+            project.render();
+        }
     }
 
     pub fn start(&mut self) {
@@ -73,6 +237,13 @@ impl ProjectWand {
 }
 
 impl TemplateEntryList {
+    pub fn new() -> TemplateEntryList {
+        TemplateEntryList {
+            keys: vec!["Exit".into()],
+            templates: HashMap::new(),
+        }
+    }
+
     pub fn add_template_path(&mut self, path: String) {
         let templates_dir = read_dir(path);
 
@@ -101,19 +272,24 @@ impl TemplateEntryList {
             let config_file = File::open(config_file_dir);
 
             if let Err(e) = config_file {
-                panic!("Read files error: {}", e);
+                panic!("Read config file error: {}", e);
             }
 
-            let template: TemplateConfig = serde_json::from_reader(config_file.unwrap()).unwrap();
+            let config: TemplateConfig = serde_json::from_reader(config_file.unwrap()).unwrap();
 
-            debug!(target: LOG_TARGET, "got a valid template: {:?}", template);
+            debug!(target: LOG_TARGET, "got a valid template: {:?}", config);
 
-            self.keys.push(template.id.clone());
-            self.templates.insert(template.id.clone(), TemplateEntry {
-                id: template.id.clone(),
-                name: template.name.clone(),
-                config: template,
-                path: template_dir.into(),
+            if self.templates.contains_key(&config.id.clone()) {
+                println!("template '{}' loaded, skip", config.id.clone());
+                continue;
+            }
+
+            self.keys.push(config.id.clone());
+            self.templates.insert(config.id.clone(), TemplateEntry {
+                id: config.id.clone(),
+                name: config.name.clone(),
+                config,
+                path: template_dir.path().display().to_string(),
             });
         }
     }

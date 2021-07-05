@@ -108,7 +108,7 @@ impl Project {
 
         output_path = output_path.trim_end_matches("/").into();
         output_path.push_str("/");
-        output_path.push_str(&template_id.clone());
+        output_path.push_str(&project_name.clone());
 
         match create_dir_all(output_path.clone()) {
             Err(e) => panic!("Cannot create target path, {}", e),
@@ -119,7 +119,7 @@ impl Project {
 
             debug!(target: LOG_TARGET, "find a template: {:?}, {:?}", template_name, template);
 
-            let output_file = format!("{}/{}", &output_path, project_name);
+            let output_file = format!("{}/{}", &output_path, template_name.clone());
             let output_file_path = PathBuf::from(output_file.clone());
             let output_dir = output_file_path.parent().unwrap();
 

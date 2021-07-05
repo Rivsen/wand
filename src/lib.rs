@@ -12,7 +12,7 @@ use log::{info, warn, debug};
 use std::ops::Add;
 use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::{Borrow};
 
 pub const LOG_TARGET: &str = "wand";
 
@@ -45,7 +45,7 @@ pub struct TemplateEntryOption {
 
 pub struct ProjectWand {
     template_list: TemplateEntryList,
-    projects: Vec<Project>,
+    projects: HashMap<String, Project>,
     internal_path: String,
     external_paths: Vec<String>,
 }
@@ -146,7 +146,7 @@ impl ProjectWand {
             internal_path: "templates/".into(),
             external_paths: vec![],
             template_list: TemplateEntryList::new(),
-            projects: vec![],
+            projects: HashMap::new(),
         }
     }
 
@@ -159,7 +159,7 @@ impl ProjectWand {
         }
     }
 
-    pub fn print_console_table(&self) {
+    pub fn print_console_templates_table(&self) {
         let mut table = Table::new();
         table.add_row(row!["id", "Name", "Path"]);
 
@@ -174,11 +174,30 @@ impl ProjectWand {
         table.printstd();
     }
 
+    pub fn print_console_projects_table(&self) {
+        let mut table = Table::new();
+        table.add_row(row!["Name", "Template", "Output", "Context"]);
+
+        for (project_name, project) in self.projects.borrow().into_iter() {
+            table.add_row(Row::new(vec![
+                Cell::new(&project_name),
+                Cell::new(&project.template_id.clone().unwrap_or("Not Set".into())),
+                Cell::new(&project.output_path.clone().unwrap_or("Not Set".into())),
+                Cell::new(&format!("{:?}", &project.context)),
+            ]));
+        }
+
+        table.printstd();
+    }
+
     pub fn console_loop(&mut self) {
         let theme = ColorfulTheme::default();
 
         loop {
-            self.print_console_table();
+            println!("\nConfigured Projects");
+            self.print_console_projects_table();
+            println!("\nLoaded templates");
+            self.print_console_templates_table();
             let term = Term::buffered_stderr();
 
             let project_name = Input::<String>::with_theme(&theme)
@@ -204,7 +223,7 @@ impl ProjectWand {
             let template_entry_id = self.template_list.keys.get(template_index).unwrap().clone();
             let template_entry = self.template_list.templates.get_mut(&template_entry_id).unwrap();
 
-            let mut project = Project::new(project_name);
+            let mut project = Project::new(project_name.clone());
             project.template_id = Some(template_entry_id.clone());
             project.init_tera(template_entry.path.clone());
             project.init_context();
@@ -227,6 +246,8 @@ impl ProjectWand {
             }
 
             project.render();
+
+            self.projects.insert(project_name.clone(), project);
         }
     }
 

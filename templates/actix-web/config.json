@@ -1,0 +1,7 @@
+{
+	"id": "actix-web",
+	"name": "Actix Web Template",
+	"options": [
+		{"id":"server_workers", "name":"Server workers", "default":"4", "required":false}
+	]
+}

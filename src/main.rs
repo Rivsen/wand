@@ -1,21 +1,22 @@
-extern crate clap;
-extern crate tera;
 extern crate wand;
 
-use clap::{App};
-use wand::ProjectWand;
-
-fn build_cli_app() -> App<'static, 'static> {
-    App::new("My Wand")
-}
+use wand::cli_app::{build_cli_app, generator_sub_command};
+use wand::generator::ProjectWand;
 
 fn main() {
     env_logger::init();
 
     // cli app
-    let app = build_cli_app();
-    app.get_matches();
-    let mut wand_project = ProjectWand::new();
+    let mut app = build_cli_app();
+    // add generator sub command
+    app = app.subcommand(generator_sub_command());
+    let matches = app.get_matches();
 
-    wand_project.start();
+    match matches.subcommand() {
+        ("generator", Some(_generator_command)) => {
+            let mut wand_project = ProjectWand::new();
+            wand_project.start();
+        },
+        _ => println!("{}", matches.usage()),
+    }
 }
